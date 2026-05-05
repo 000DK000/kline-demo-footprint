@@ -237,7 +237,7 @@ export interface CandleTooltipStyle extends TooltipStyle {
   rect: CandleTooltipRectStyle
 }
 
-export type CandleType = 'candle_solid' | 'candle_stroke' | 'candle_up_stroke' | 'candle_down_stroke' | 'ohlc' | 'area'
+export type CandleType = 'candle_solid' | 'candle_stroke' | 'candle_up_stroke' | 'candle_down_stroke' | 'ohlc' | 'area' | 'footprint'
 
 export type CandleColorCompareRule = 'current_open' | 'previous_close'
 
@@ -255,8 +255,24 @@ export interface CandleStyle {
   type: CandleType
   bar: CandleBarColor
   area: CandleAreaStyle
+  footprint: CandleFootprintStyle
   priceMark: CandlePriceMarkStyle
   tooltip: CandleTooltipStyle
+}
+
+export interface CandleFootprintStyle {
+  padding: number
+  columnGap: number
+  minAlpha: number
+  maxAlpha: number
+  bidColor: string
+  askColor: string
+  textColor: string
+  textColorLight: string
+  fontSize: number
+  fontFamily: string
+  fontWeight: string
+  pocColor: string
 }
 
 export type IndicatorPolygonStyle = Omit<PolygonStyle, 'color' | 'borderColor'> & ChangeColor
@@ -428,6 +444,20 @@ function getDefaultCandleStyle (): CandleStyle {
         animation: true,
         animationDuration: 1000
       }
+    },
+    footprint: {
+      padding: 1,
+      columnGap: 1,
+      minAlpha: 0.12,
+      maxAlpha: 0.92,
+      bidColor: '#F92855',
+      askColor: '#2DC08E',
+      textColor: '#FFFFFF',
+      textColorLight: '#111111',
+      fontSize: 11,
+      fontFamily: 'Helvetica Neue',
+      fontWeight: 'normal',
+      pocColor: '#000000'
     },
     priceMark: {
       show: true,
