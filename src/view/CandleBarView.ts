@@ -89,7 +89,7 @@ export default class CandleBarView extends ChildrenView {
           let rects: Array<FigureCreate<RectAttrs | RectAttrs[], Partial<RectStyle>>> = []
           switch (type) {
             case 'footprint': {
-              const drawn = this._drawFootprint(ctx, x, barSpace, correction, current, colors, yAxis, candleStyles.footprint)
+              const drawn = this._drawFootprint(ctx, x, barSpace, current, colors, yAxis, candleStyles.footprint)
               if (!drawn) {
                 rects = this._createSolidBar(x, priceY, barSpace, colors, correction)
               }
@@ -240,7 +240,6 @@ export default class CandleBarView extends ChildrenView {
     ctx: CanvasRenderingContext2D,
     x: number,
     barSpace: BarSpace,
-    correction: number,
     current: Nullable<KLineData>,
     colors: string[],
     yAxis: Axis,
@@ -255,26 +254,55 @@ export default class CandleBarView extends ChildrenView {
     const step = fp.step
     if (typeof step !== 'number' || !Number.isFinite(step) || step <= 0) return false
 
-    const candleWidth = barSpace.gapBar + correction
-    const left = x - barSpace.halfGapBar
+    // Draw a subtle candle body/wick behind the footprint so each bar still reads as a candle
+    // (prevents the visual "holes/gaps" effect when only a few price levels have volume).
+    const open = Number(current?.open)
+    const close = Number(current?.close)
+    const high = Number(current?.high)
+    const low = Number(current?.low)
+    if (![open, close, high, low].every(Number.isFinite)) return false
+
+    // Footprint cells need as much horizontal space as possible. Using `gapBar` leaves a visible empty gap
+    // between candles (by design in normal candle bodies). For footprint, prefer the full `bar` width.
+    const candleWidth = barSpace.bar
+    const left = x - barSpace.halfBar
     const padding = Math.max(0, Math.round(styles.padding))
     const innerWidth = Math.max(0, candleWidth - padding * 2)
     const columnGap = Math.max(0, Math.round(styles.columnGap))
     const colWidth = Math.max(0, Math.floor((innerWidth - columnGap) / 2))
     if (colWidth <= 2) return false
 
-    let maxCell = 0
-    let pocPrice: number | null = null
+    // Expand levels so we have a consistent row grid from high..low.
+    const levelByPrice = new Map<number, { bid: number; ask: number }>()
     for (const l of fp.levels) {
+      const price = Number(l.price)
+      if (!Number.isFinite(price)) continue
       const bid = Number(l.bid ?? 0)
       const ask = Number(l.ask ?? 0)
-      const total = bid + ask
+      levelByPrice.set(price, { bid: Number.isFinite(bid) ? bid : 0, ask: Number.isFinite(ask) ? ask : 0 })
+    }
+
+    const hiBucket = Math.ceil(high / step) * step
+    const loBucket = Math.floor(low / step) * step
+    if (!Number.isFinite(hiBucket) || !Number.isFinite(loBucket)) return false
+
+    let maxCell = 0
+    let pocPrice: number | null = null
+    const prices: number[] = []
+    let rowGuard = 0
+    for (let p = hiBucket; p >= loBucket - step / 2; p -= step) {
+      rowGuard++
+      if (rowGuard > 5000) break
+      const price = Math.round((p / step)) * step
+      prices.push(price)
+      const v = levelByPrice.get(price) ?? { bid: 0, ask: 0 }
+      const total = v.bid + v.ask
       if (total > maxCell) {
         maxCell = total
-        pocPrice = l.price
+        pocPrice = price
       }
     }
-    if (!(maxCell > 0)) return false
+    // Even if all cells are zero, still draw the candle silhouette (but skip the grid).
 
     const minAlpha = Math.min(styles.maxAlpha, Math.max(0, styles.minAlpha))
     const maxAlpha = Math.min(1, Math.max(minAlpha, styles.maxAlpha))
@@ -284,52 +312,70 @@ export default class CandleBarView extends ChildrenView {
     const pocColor = styles.pocColor
 
     ctx.save()
+
+    // Wick
+    ctx.fillStyle = colors[2]
+    const highY = yAxis.convertToPixel(high)
+    const lowY = yAxis.convertToPixel(low)
+    ctx.fillRect(x, Math.min(highY, lowY), 1, Math.max(1, Math.abs(lowY - highY)))
+
+    // Body outline (very light)
+    const openY = yAxis.convertToPixel(open)
+    const closeY = yAxis.convertToPixel(close)
+    const bodyY = Math.min(openY, closeY)
+    const bodyH = Math.max(1, Math.abs(closeY - openY))
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(left + 0.5, bodyY + 0.5, candleWidth - 1, bodyH - 1)
+
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.font = `${styles.fontWeight} ${styles.fontSize}px ${styles.fontFamily}`
 
-    for (const l of fp.levels) {
-      const price = Number(l.price)
-      const bid = Number(l.bid ?? 0)
-      const ask = Number(l.ask ?? 0)
+    if (maxCell > 0) {
+      for (const price of prices) {
+        const v = levelByPrice.get(price) ?? { bid: 0, ask: 0 }
+        const bid = v.bid
+        const ask = v.ask
 
-      const topPx = yAxis.convertToPixel(price + step / 2)
-      const bottomPx = yAxis.convertToPixel(price - step / 2)
-      const y = Math.min(topPx, bottomPx)
-      const h = Math.max(1, Math.abs(bottomPx - topPx))
+        const topPx = yAxis.convertToPixel(price + step / 2)
+        const bottomPx = yAxis.convertToPixel(price - step / 2)
+        const y = Math.min(topPx, bottomPx)
+        const h = Math.max(1, Math.abs(bottomPx - topPx))
 
-      const bidAlpha = minAlpha + (bid / maxCell) * (maxAlpha - minAlpha)
-      const askAlpha = minAlpha + (ask / maxCell) * (maxAlpha - minAlpha)
+        const bidAlpha = minAlpha + (bid / maxCell) * (maxAlpha - minAlpha)
+        const askAlpha = minAlpha + (ask / maxCell) * (maxAlpha - minAlpha)
 
-      // Bid column (left)
-      if (bid > 0) {
-        ctx.fillStyle = this._withAlpha(bidColor, bidAlpha)
-        ctx.fillRect(left + padding, y, colWidth, h)
-      }
-      // Ask column (right)
-      if (ask > 0) {
-        ctx.fillStyle = this._withAlpha(askColor, askAlpha)
-        ctx.fillRect(left + padding + colWidth + columnGap, y, colWidth, h)
-      }
-
-      const isPoc = pocPrice != null && price === pocPrice
-      if (isPoc) {
-        ctx.strokeStyle = pocColor
-        ctx.lineWidth = 1
-        ctx.strokeRect(left + padding + 0.5, y + 0.5, colWidth * 2 + columnGap - 1, h - 1)
-      }
-
-      // Text (only if enough vertical space)
-      if (h >= styles.fontSize + 2) {
-        // Bid text
+        // Bid column (left)
         if (bid > 0) {
-          ctx.fillStyle = bidAlpha > 0.45 ? styles.textColor : styles.textColorLight
-          ctx.fillText(this._formatVol(bid), left + padding + colWidth / 2, y + h / 2)
+          ctx.fillStyle = this._withAlpha(bidColor, bidAlpha)
+          ctx.fillRect(left + padding, y, colWidth, h)
         }
-        // Ask text
+        // Ask column (right)
         if (ask > 0) {
-          ctx.fillStyle = askAlpha > 0.45 ? styles.textColor : styles.textColorLight
-          ctx.fillText(this._formatVol(ask), left + padding + colWidth + columnGap + colWidth / 2, y + h / 2)
+          ctx.fillStyle = this._withAlpha(askColor, askAlpha)
+          ctx.fillRect(left + padding + colWidth + columnGap, y, colWidth, h)
+        }
+
+        const isPoc = pocPrice != null && price === pocPrice
+        if (isPoc) {
+          ctx.strokeStyle = pocColor
+          ctx.lineWidth = 1
+          ctx.strokeRect(left + padding + 0.5, y + 0.5, colWidth * 2 + columnGap - 1, h - 1)
+        }
+
+        // Text (only if enough vertical space)
+        if (h >= styles.fontSize + 2) {
+          // Bid text
+          if (bid > 0) {
+            ctx.fillStyle = bidAlpha > 0.45 ? styles.textColor : styles.textColorLight
+            ctx.fillText(this._formatVol(bid), left + padding + colWidth / 2, y + h / 2)
+          }
+          // Ask text
+          if (ask > 0) {
+            ctx.fillStyle = askAlpha > 0.45 ? styles.textColor : styles.textColorLight
+            ctx.fillText(this._formatVol(ask), left + padding + colWidth + columnGap + colWidth / 2, y + h / 2)
+          }
         }
       }
     }
