@@ -210,6 +210,11 @@ export default class StoreImp implements Store {
   private _loading = false
 
   /**
+   * Active data request version
+   */
+  private _dataTaskId = 0
+
+  /**
   * Whether there are forward and backward more flag
    */
   private readonly _dataLoadMore = { forward: false, backward: false }
@@ -715,12 +720,16 @@ export default class StoreImp implements Store {
   private _processDataLoad (type: DataLoadType): void {
     if (!this._loading && isValid(this._dataLoader) && isValid(this._symbol) && isValid(this._period)) {
       this._loading = true
+      const dataTaskId = this._dataTaskId
       const params: DataLoaderGetBarsParams = {
         type,
         symbol: this._symbol,
         period: this._period,
         timestamp: null,
         callback: (data: KLineData[], more?: DataLoadMore) => {
+          if (dataTaskId !== this._dataTaskId) {
+            return
+          }
           this._loading = false
           this._addData(data, type, more)
           if (type === 'init') {
@@ -728,6 +737,9 @@ export default class StoreImp implements Store {
               symbol: this._symbol!,
               period: this._period!,
               callback: (data: KLineData) => {
+                if (dataTaskId !== this._dataTaskId) {
+                  return
+                }
                 this._addData(data, 'update')
               }
             })
@@ -761,6 +773,7 @@ export default class StoreImp implements Store {
   }
 
   resetData (fn?: () => void): void {
+    this._dataTaskId++
     this._processDataUnsubscribe()
     fn?.()
     this._loading = false
